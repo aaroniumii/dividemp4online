@@ -29,5 +29,9 @@
         <p>Powered by FFmpeg. Uploads are processed locally on the server.</p>
       </footer>
     </div>
+    <script>
+      console.debug('Page rendered', { path: '{{ request.path }}', title: document.title });
+    </script>
+    {% block scripts %}{% endblock %}
   </body>
 </html>

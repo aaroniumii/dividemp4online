@@ -31,3 +31,39 @@
     </ol>
   </section>
 {% endblock %}
+
+{% block scripts %}
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      console.info('Index page ready for uploads');
+      const form = document.querySelector('.form');
+      const fileInput = document.querySelector('#video');
+      const radios = document.querySelectorAll('input[name="parts"]');
+
+      if (fileInput) {
+        fileInput.addEventListener('change', (event) => {
+          const files = event.target.files || [];
+          const fileName = files.length > 0 ? files[0].name : null;
+          console.info('File input changed', { fileName, fileCount: files.length });
+        });
+      }
+
+      radios.forEach((radio) => {
+        radio.addEventListener('change', () => {
+          console.info('Parts selection updated', { value: radio.value });
+        });
+      });
+
+      if (form) {
+        form.addEventListener('submit', () => {
+          const selected = document.querySelector('input[name="parts"]:checked');
+          const fileName = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0].name : null;
+          console.info('Submitting split request', {
+            fileName,
+            parts: selected ? selected.value : null,
+          });
+        });
+      }
+    });
+  </script>
+{% endblock %}
