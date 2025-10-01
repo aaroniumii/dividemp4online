@@ -19,3 +19,16 @@
     </div>
   </section>
 {% endblock %}
+
+{% block scripts %}
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const files = Array.from(document.querySelectorAll('.file-list__link')).map((link) => link.textContent);
+      console.info('Result page loaded', {
+        jobId: '{{ job_id }}',
+        fileCount: files.length,
+        files,
+      });
+    });
+  </script>
+{% endblock %}

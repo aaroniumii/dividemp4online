@@ -1,6 +1,9 @@
 import json
+import logging
 import os
+import shlex
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -29,24 +32,43 @@ ALLOWED_EXTENSIONS = {"mp4"}
 MAX_PARTS = 4
 MIN_PARTS = 2
 
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "change-me")
 app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
 app.config["OUTPUT_FOLDER"] = str(OUTPUT_FOLDER)
+app.logger.setLevel(logging.INFO)
 
 
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def run_command(command: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
+def run_command(command: list[str], *, description: str | None = None) -> subprocess.CompletedProcess:
+    command_text = shlex.join(command)
+    label = description or "command"
+    app.logger.info("Running %s: %s", label, command_text)
+    start_time = time.perf_counter()
+    result = subprocess.run(
         command,
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
+    elapsed = time.perf_counter() - start_time
+    app.logger.info("Finished %s in %.2f seconds", label, elapsed)
+
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
+    if stdout:
+        app.logger.debug("%s stdout: %s", label, stdout)
+    if stderr:
+        app.logger.warning("%s stderr: %s", label, stderr)
+
+    return result
 
 
 def get_duration_seconds(file_path: Path) -> float:
@@ -60,8 +82,18 @@ def get_duration_seconds(file_path: Path) -> float:
         "csv=p=0",
         str(file_path),
     ]
-    result = run_command(command)
-    return float(result.stdout.strip())
+    result = run_command(command, description="ffprobe duration lookup")
+
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError as exc:
+        raise ValueError(f"Unable to determine duration for {file_path}") from exc
+
+    if duration <= 0:
+        raise ValueError(f"Invalid video duration ({duration}) for {file_path}")
+
+    app.logger.info("Duration for %s: %.2f seconds", file_path, duration)
+    return duration
 
 
 def split_video(file_path: Path, output_dir: Path, parts: int) -> list[Path]:
@@ -76,6 +108,9 @@ def split_video(file_path: Path, output_dir: Path, parts: int) -> list[Path]:
         command = [
             "ffmpeg",
             "-y",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
             "-i",
             str(file_path),
             "-ss",
@@ -88,9 +123,10 @@ def split_video(file_path: Path, output_dir: Path, parts: int) -> list[Path]:
             command.extend(["-t", f"{part_duration:.2f}"])
 
         command.append(str(output_file))
-        run_command(command)
+        run_command(command, description=f"ffmpeg split part {index + 1}/{parts}")
         output_files.append(output_file)
 
+    app.logger.info("Completed splitting %s into %d parts", file_path, parts)
     return output_files
 
 
@@ -98,6 +134,7 @@ def save_metadata(output_dir: Path, data: dict) -> None:
     metadata_path = output_dir / METADATA_FILENAME
     with metadata_path.open("w", encoding="utf-8") as metadata_file:
         json.dump(data, metadata_file, indent=2)
+    app.logger.info("Saved metadata to %s", metadata_path)
 
 
 def load_metadata(output_dir: Path) -> dict | None:
@@ -110,9 +147,15 @@ def load_metadata(output_dir: Path) -> dict | None:
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    app.logger.debug("Rendering index page with method %s", request.method)
+
     if request.method == "POST":
         uploaded_file = request.files.get("video")
         parts = request.form.get("parts", type=int)
+
+        app.logger.info(
+            "Received upload request: filename=%s parts=%s", getattr(uploaded_file, "filename", None), parts
+        )
 
         if uploaded_file is None or uploaded_file.filename == "":
             flash("Please choose an MP4 file to upload.", "error")
@@ -134,6 +177,7 @@ def index():
 
         filename = secure_filename(uploaded_file.filename)
         saved_file = upload_dir / filename
+        app.logger.info("Saving uploaded file to %s", saved_file)
         uploaded_file.save(saved_file)
 
         try:
@@ -155,6 +199,9 @@ def index():
             },
         )
 
+        app.logger.info(
+            "Job %s completed with %d outputs", job_id, len(output_files)
+        )
         return redirect(url_for("result", job_id=job_id))
 
     return render_template("index.html")
@@ -171,6 +218,7 @@ def result(job_id: str):
     output_files = [file for file in output_dir.iterdir() if file.is_file() and file.name != METADATA_FILENAME]
     output_files.sort()
 
+    app.logger.info("Rendering result for job %s with %d files", job_id, len(output_files))
     return render_template(
         "result.html",
         job_id=job_id,
@@ -189,7 +237,21 @@ def download(job_id: str, filename: str):
     if Path(filename).name != filename:
         abort(400)
 
+    app.logger.info("Downloading %s from job %s", filename, job_id)
     return send_from_directory(output_dir, filename, as_attachment=True)
+
+
+@app.before_request
+def log_request_start():
+    app.logger.debug("Handling %s %s", request.method, request.path)
+
+
+@app.after_request
+def log_request_end(response):
+    app.logger.debug(
+        "Completed %s %s with status %s", request.method, request.path, response.status_code
+    )
+    return response
 
 
 if __name__ == "__main__":
