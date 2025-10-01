@@ -14,6 +14,7 @@ from flask import (
     Flask,
     abort,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -169,6 +170,36 @@ def load_metadata(output_dir: Path) -> dict | None:
         return None
 
 
+def build_job_payload(job_id: str, output_dir: Path) -> dict:
+    metadata = load_metadata(output_dir) or {}
+    status = metadata.get("status", "unknown")
+
+    files: list[str] = []
+    if status == "completed":
+        files = metadata.get("outputs", [])
+        if not files:
+            files = [
+                file.name
+                for file in output_dir.iterdir()
+                if file.is_file() and file.name != METADATA_FILENAME
+            ]
+            files.sort()
+
+    payload = {
+        "job_id": job_id,
+        "status": status,
+        "metadata": metadata,
+        "files": files,
+    }
+
+    if status == "completed" and metadata.get("outputs") != files:
+        metadata = dict(metadata)
+        metadata["outputs"] = files
+        payload["metadata"] = metadata
+
+    return payload
+
+
 def process_job(
     job_id: str,
     saved_file: Path,
@@ -300,20 +331,12 @@ def result(job_id: str):
         flash("The requested result was not found.", "error")
         return redirect(url_for("index"))
 
-    metadata = load_metadata(output_dir) or {}
-    status = metadata.get("status", "unknown")
+    payload = build_job_payload(job_id, output_dir)
+    metadata = payload.get("metadata", {})
+    status = payload.get("status", "unknown")
+    output_files = payload.get("files", [])
 
-    output_files: list[str] = []
-    if status == "completed":
-        output_files = metadata.get("outputs", [])
-        if not output_files:
-            output_files = [
-                file.name
-                for file in output_dir.iterdir()
-                if file.is_file() and file.name != METADATA_FILENAME
-            ]
-            output_files.sort()
-    elif status == "error":
+    if status == "error":
         app.logger.error(
             "Job %s is in error state: %s", job_id, metadata.get("error_message")
         )
@@ -327,6 +350,7 @@ def result(job_id: str):
     return render_template(
         "result.html",
         job_id=job_id,
+        payload=payload,
         metadata=metadata,
         status=status,
         files=output_files,
@@ -345,6 +369,23 @@ def download(job_id: str, filename: str):
 
     app.logger.info("Downloading %s from job %s", filename, job_id)
     return send_from_directory(output_dir, filename, as_attachment=True)
+
+
+@app.route("/status/<job_id>")
+def job_status(job_id: str):
+    output_dir = OUTPUT_FOLDER / job_id
+    if not output_dir.exists():
+        app.logger.warning("Status requested for missing job %s", job_id)
+        return jsonify({"job_id": job_id, "status": "not-found"}), 404
+
+    payload = build_job_payload(job_id, output_dir)
+    app.logger.debug(
+        "Returning status for job %s: %s with %d files",
+        job_id,
+        payload.get("status"),
+        len(payload.get("files", [])),
+    )
+    return jsonify(payload)
 
 
 @app.before_request
