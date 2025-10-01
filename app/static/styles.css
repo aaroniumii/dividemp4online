@@ -124,6 +124,19 @@ input[type="file"] {
   box-shadow: 0 10px 20px rgba(37, 99, 235, 0.25);
 }
 
+.button--ghost {
+  background: transparent;
+  color: #1d4ed8;
+  border: 2px solid rgba(37, 99, 235, 0.4);
+  box-shadow: none;
+}
+
+.button--ghost:hover {
+  transform: none;
+  background: rgba(37, 99, 235, 0.08);
+  box-shadow: none;
+}
+
 .help h3 {
   font-size: 1.25rem;
   margin-bottom: 0.75rem;
@@ -188,6 +201,18 @@ input[type="file"] {
   color: #374151;
 }
 
+.status__spinner {
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  margin-right: 0.5rem;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  border-bottom-color: transparent;
+  animation: status-spin 0.75s linear infinite;
+  vertical-align: middle;
+}
+
 .file-list {
   list-style: none;
   padding: 0;
@@ -211,6 +236,26 @@ input[type="file"] {
 
 .actions {
   margin-top: 1.5rem;
+}
+
+.job-summary {
+  display: grid;
+  gap: 0.25rem;
+  color: #475569;
+}
+
+.job-summary p {
+  margin: 0;
+}
+
+@keyframes status-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .page__footer {

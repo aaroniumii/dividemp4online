@@ -1,55 +1,274 @@
 {% extends "base.html" %}
 {% block content %}
-  <section class="card">
+  <section
+    class="card"
+    data-job-card
+    data-job-id="{{ job_id }}"
+    data-status-url="{{ url_for('job_status', job_id=job_id) }}"
+    data-download-url-template="{{ url_for('download', job_id=job_id, filename='__FILENAME__') }}"
+    data-index-url="{{ url_for('index') }}"
+  >
     <h2>Split status</h2>
-    {% if metadata %}
-      <p><strong>Original file:</strong> {{ metadata.original_filename }}</p>
-      <p><strong>Number of parts:</strong> {{ metadata.parts }}</p>
-    {% endif %}
+    <div class="job-summary">
+      <p><strong>Original file:</strong> <span data-role="original-filename">{{ metadata.original_filename or 'Unknown file' }}</span></p>
+      <p><strong>Number of parts:</strong> <span data-role="parts">{{ metadata.parts or '-' }}</span></p>
+    </div>
 
-    {% if status == 'processing' %}
-      <p class="status status--processing">We are still processing your video. This page will refresh automatically when the files are ready.</p>
-    {% elif status == 'error' %}
-      <p class="status status--error">We could not finish splitting the video. {{ metadata.error_message or 'Please try again with a different file.' }}</p>
-      <div class="actions">
-        <a class="button" href="{{ url_for('index') }}">Try another video</a>
-      </div>
-    {% elif files %}
-      <p>The video has been divided. Download the parts below.</p>
-      <ul class="file-list">
-        {% for file in files %}
-          <li>
-            <a class="file-list__link" href="{{ url_for('download', job_id=job_id, filename=file) }}">{{ file }}</a>
-          </li>
-        {% endfor %}
-      </ul>
-      <div class="actions">
+    <div data-role="status-region">
+      {% if status == 'processing' %}
+        <p class="status status--processing">
+          <span class="status__spinner" aria-hidden="true"></span>
+          We are still processing your video. This page will update automatically when the files are ready.
+        </p>
+      {% elif status == 'error' %}
+        <p class="status status--error">{{ metadata.error_message or 'We could not finish splitting the video. Please try again with a different file.' }}</p>
+      {% elif files %}
+        <p>The video has been divided. Download the parts below.</p>
+      {% else %}
+        <p class="status status--empty">We could not locate any generated files for this request.</p>
+      {% endif %}
+    </div>
+
+    <ul class="file-list" data-role="file-list" {% if not files %}hidden{% endif %}>
+      {% for file in files %}
+        <li>
+          <a class="file-list__link" href="{{ url_for('download', job_id=job_id, filename=file) }}">{{ file }}</a>
+        </li>
+      {% endfor %}
+    </ul>
+
+    <div class="actions" data-role="actions">
+      {% if status == 'completed' %}
         <a class="button" href="{{ url_for('index') }}">Split another video</a>
-      </div>
-    {% else %}
-      <p class="status status--empty">We could not locate any generated files for this request.</p>
-      <div class="actions">
-        <a class="button" href="{{ url_for('index') }}">Upload a new video</a>
-      </div>
-    {% endif %}
+      {% elif status == 'error' %}
+        <a class="button" href="{{ url_for('index') }}">Try another video</a>
+      {% else %}
+        <button type="button" class="button button--ghost" data-role="manual-refresh">Check status now</button>
+      {% endif %}
+    </div>
+
+    <noscript>
+      <p class="status status--empty">Automatic updates require JavaScript. Please refresh the page manually to check the latest status.</p>
+    </noscript>
   </section>
 {% endblock %}
 
 {% block scripts %}
+  <script id="job-initial-data" type="application/json">{{ payload|tojson }}</script>
   <script>
     document.addEventListener('DOMContentLoaded', () => {
-      const files = Array.from(document.querySelectorAll('.file-list__link')).map((link) => link.textContent);
-      console.info('Result page loaded', {
-        jobId: '{{ job_id }}',
-        status: '{{ status }}',
-        fileCount: files.length,
-        files,
-      });
+      const card = document.querySelector('[data-job-card]');
+      if (!card) {
+        return;
+      }
 
-      if ('{{ status }}' === 'processing') {
-        setTimeout(() => {
-          window.location.reload();
-        }, 5000);
+      const jobId = card.dataset.jobId;
+      const statusUrl = card.dataset.statusUrl;
+      const downloadTemplate = card.dataset.downloadUrlTemplate || '';
+      const indexUrl = card.dataset.indexUrl || '#';
+      const statusRegion = card.querySelector('[data-role="status-region"]');
+      const fileList = card.querySelector('[data-role="file-list"]');
+      const actions = card.querySelector('[data-role="actions"]');
+      const filenameEl = card.querySelector('[data-role="original-filename"]');
+      const partsEl = card.querySelector('[data-role="parts"]');
+      const initialDataScript = document.getElementById('job-initial-data');
+      let pollTimer = null;
+      let lastStatus = null;
+
+      function createDownloadUrl(fileName) {
+        if (!downloadTemplate) {
+          return '#';
+        }
+        return downloadTemplate.replace('__FILENAME__', encodeURIComponent(fileName));
+      }
+
+      function clearPoll() {
+        if (pollTimer !== null) {
+          window.clearTimeout(pollTimer);
+          pollTimer = null;
+        }
+      }
+
+      function schedulePoll(delay = 5000) {
+        clearPoll();
+        pollTimer = window.setTimeout(() => {
+          fetchStatus('scheduled');
+        }, delay);
+      }
+
+      function setupManualRefresh() {
+        if (!actions) {
+          return;
+        }
+        const manualButton = actions.querySelector('[data-role="manual-refresh"]');
+        if (manualButton) {
+          manualButton.addEventListener('click', () => {
+            console.info('Manual status refresh triggered', { jobId });
+            fetchStatus('manual');
+          }, { once: true });
+        }
+      }
+
+      function renderStatus(payload) {
+        if (!payload || typeof payload !== 'object') {
+          return;
+        }
+
+        if (payload.status !== lastStatus && lastStatus !== null) {
+          console.info('Job status changed', { jobId, from: lastStatus, to: payload.status });
+        }
+        lastStatus = payload.status;
+
+        const metadata = payload.metadata || {};
+
+        if (filenameEl && metadata.original_filename) {
+          filenameEl.textContent = metadata.original_filename;
+        }
+
+        if (partsEl && metadata.parts) {
+          partsEl.textContent = metadata.parts;
+        }
+
+        if (statusRegion) {
+          statusRegion.innerHTML = '';
+          const statusMessage = document.createElement('p');
+          statusMessage.classList.add('status');
+
+          if (payload.status === 'processing') {
+            statusMessage.classList.add('status--processing');
+            statusMessage.innerHTML = '<span class="status__spinner" aria-hidden="true"></span>We are still processing your video. This page will update automatically when the files are ready.';
+          } else if (payload.status === 'error') {
+            statusMessage.classList.add('status--error');
+            statusMessage.textContent = metadata.error_message || 'We could not finish splitting the video. Please try again with a different file.';
+          } else if (payload.status === 'completed') {
+            statusMessage.textContent = 'The video has been divided. Download the parts below.';
+          } else {
+            statusMessage.classList.add('status--empty');
+            statusMessage.textContent = 'We could not locate any generated files for this request.';
+          }
+
+          statusRegion.append(statusMessage);
+        }
+
+        if (fileList) {
+          fileList.innerHTML = '';
+          const files = Array.isArray(payload.files) ? payload.files : [];
+          if (payload.status === 'completed' && files.length > 0) {
+            fileList.removeAttribute('hidden');
+            files.forEach((fileName) => {
+              if (!fileName) {
+                return;
+              }
+              const listItem = document.createElement('li');
+              const link = document.createElement('a');
+              link.className = 'file-list__link';
+              link.href = createDownloadUrl(fileName);
+              link.textContent = fileName;
+              listItem.append(link);
+              fileList.append(listItem);
+            });
+          } else {
+            fileList.setAttribute('hidden', 'hidden');
+          }
+        }
+
+        if (actions) {
+          actions.innerHTML = '';
+          if (payload.status === 'completed') {
+            const button = document.createElement('a');
+            button.className = 'button';
+            button.href = indexUrl;
+            button.textContent = 'Split another video';
+            actions.append(button);
+          } else if (payload.status === 'error') {
+            const button = document.createElement('a');
+            button.className = 'button';
+            button.href = indexUrl;
+            button.textContent = 'Try another video';
+            actions.append(button);
+          } else if (payload.status === 'processing') {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'button button--ghost';
+            button.dataset.role = 'manual-refresh';
+            button.textContent = 'Check status now';
+            actions.append(button);
+          } else {
+            const button = document.createElement('a');
+            button.className = 'button';
+            button.href = indexUrl;
+            button.textContent = 'Upload a new video';
+            actions.append(button);
+          }
+        }
+
+        setupManualRefresh();
+      }
+
+      async function fetchStatus(trigger = 'auto') {
+        if (!statusUrl) {
+          return;
+        }
+
+        try {
+          const response = await fetch(statusUrl, {
+            headers: { Accept: 'application/json' },
+            cache: 'no-store',
+          });
+
+          if (!response.ok) {
+            throw new Error(`Status request failed: ${response.status}`);
+          }
+
+          const payload = await response.json();
+          console.info('Fetched job status', {
+            jobId,
+            trigger,
+            status: payload.status,
+            fileCount: Array.isArray(payload.files) ? payload.files.length : 0,
+          });
+
+          renderStatus(payload);
+
+          if (payload.status === 'processing') {
+            schedulePoll();
+          } else {
+            clearPoll();
+          }
+        } catch (error) {
+          console.error('Unable to refresh job status', error);
+          if (statusRegion && !statusRegion.querySelector('[data-role="status-error"]')) {
+            const warning = document.createElement('p');
+            warning.classList.add('status', 'status--error');
+            warning.dataset.role = 'status-error';
+            warning.textContent = 'We could not refresh the status automatically. Please use the button below to check again.';
+            statusRegion.append(warning);
+          }
+          schedulePoll(10000);
+        }
+      }
+
+      let initialPayload = null;
+      if (initialDataScript) {
+        try {
+          initialPayload = JSON.parse(initialDataScript.textContent);
+        } catch (error) {
+          console.error('Unable to parse initial job data', error);
+        }
+      }
+
+      if (initialPayload) {
+        console.info('Result page ready', {
+          jobId,
+          status: initialPayload.status,
+          fileCount: Array.isArray(initialPayload.files) ? initialPayload.files.length : 0,
+        });
+        renderStatus(initialPayload);
+        if (initialPayload.status === 'processing') {
+          schedulePoll(1500);
+        }
+      } else {
+        fetchStatus('initial');
       }
     });
   </script>
