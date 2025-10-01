@@ -1,22 +1,37 @@
 {% extends "base.html" %}
 {% block content %}
   <section class="card">
-    <h2>Split complete</h2>
+    <h2>Split status</h2>
     {% if metadata %}
       <p><strong>Original file:</strong> {{ metadata.original_filename }}</p>
       <p><strong>Number of parts:</strong> {{ metadata.parts }}</p>
     {% endif %}
-    <p>The video has been divided. Download the parts below.</p>
-    <ul class="file-list">
-      {% for file in files %}
-        <li>
-          <a class="file-list__link" href="{{ url_for('download', job_id=job_id, filename=file) }}">{{ file }}</a>
-        </li>
-      {% endfor %}
-    </ul>
-    <div class="actions">
-      <a class="button" href="{{ url_for('index') }}">Split another video</a>
-    </div>
+
+    {% if status == 'processing' %}
+      <p class="status status--processing">We are still processing your video. This page will refresh automatically when the files are ready.</p>
+    {% elif status == 'error' %}
+      <p class="status status--error">We could not finish splitting the video. {{ metadata.error_message or 'Please try again with a different file.' }}</p>
+      <div class="actions">
+        <a class="button" href="{{ url_for('index') }}">Try another video</a>
+      </div>
+    {% elif files %}
+      <p>The video has been divided. Download the parts below.</p>
+      <ul class="file-list">
+        {% for file in files %}
+          <li>
+            <a class="file-list__link" href="{{ url_for('download', job_id=job_id, filename=file) }}">{{ file }}</a>
+          </li>
+        {% endfor %}
+      </ul>
+      <div class="actions">
+        <a class="button" href="{{ url_for('index') }}">Split another video</a>
+      </div>
+    {% else %}
+      <p class="status status--empty">We could not locate any generated files for this request.</p>
+      <div class="actions">
+        <a class="button" href="{{ url_for('index') }}">Upload a new video</a>
+      </div>
+    {% endif %}
   </section>
 {% endblock %}
 
@@ -26,9 +41,16 @@
       const files = Array.from(document.querySelectorAll('.file-list__link')).map((link) => link.textContent);
       console.info('Result page loaded', {
         jobId: '{{ job_id }}',
+        status: '{{ status }}',
         fileCount: files.length,
         files,
       });
+
+      if ('{{ status }}' === 'processing') {
+        setTimeout(() => {
+          window.location.reload();
+        }, 5000);
+      }
     });
   </script>
 {% endblock %}
