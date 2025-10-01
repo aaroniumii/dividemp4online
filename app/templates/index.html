@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card">
+    <h2>Upload an MP4 file</h2>
+    <p>Select the MP4 video you want to split and choose how many parts you need. Each part will have the same duration.</p>
+    <form method="post" enctype="multipart/form-data" class="form">
+      <div class="form__group">
+        <label for="video">Video file (MP4)</label>
+        <input type="file" id="video" name="video" accept="video/mp4" required />
+      </div>
+      <div class="form__group">
+        <span>Number of parts</span>
+        <div class="radio-group">
+          {% for value in [2, 3, 4] %}
+            <label class="radio">
+              <input type="radio" name="parts" value="{{ value }}" {% if value == 2 %}checked{% endif %} />
+              <span>{{ value }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <button type="submit" class="button">Split video</button>
+    </form>
+  </section>
+  <section class="help">
+    <h3>How it works</h3>
+    <ol>
+      <li>Upload your MP4 video from your computer.</li>
+      <li>Choose whether you want 2, 3, or 4 equal parts.</li>
+      <li>The server splits the video using FFmpeg and shows you download links.</li>
+    </ol>
+  </section>
+{% endblock %}
